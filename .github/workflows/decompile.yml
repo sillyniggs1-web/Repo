@@ -37,12 +37,25 @@ jobs:
       - name: Decompile
         shell: pwsh
         run: |
-          $exe = (Get-ChildItem tool -Filter *.exe | Select-Object -First 1)
-          # < NUL = no keyboard input, so a "press any key" prompt can't hang the job
-          cmd /c "`"$($exe.FullName)`" `"$env:GITHUB_WORKSPACE\luac`" < NUL" 2>&1 | Out-String | Write-Host
-          # default output folder is next to the exe
+          $exe = Get-ChildItem tool -Filter *.exe | Select-Object -First 1
+          Write-Host "Input files (LuaJIT bytecode starts with 1B 4C 4A):"
+          Get-ChildItem luac -Recurse -File | Where-Object { $_.Name -ne '.gitkeep' } | ForEach-Object {
+            $b = [System.IO.File]::ReadAllBytes($_.FullName) | Select-Object -First 4
+            Write-Host ("{0} | {1} bytes | header: {2}" -f $_.Name, $_.Length, (($b | ForEach-Object { '{0:X2}' -f $_ }) -join ' '))
+          }
           New-Item -ItemType Directory -Force -Path lua_out | Out-Null
-          Copy-Item "$($exe.DirectoryName)\output\*" lua_out -Recurse -Force
+          # -s = silent (no error prompts), -f = force overwrite (no overwrite prompt), -o = output dir
+          New-Item -ItemType File -Force -Path empty_stdin.txt | Out-Null
+          $p = Start-Process -FilePath $exe.FullName `
+            -ArgumentList @("$env:GITHUB_WORKSPACE\luac", "-s", "-f", "-o", "$env:GITHUB_WORKSPACE\lua_out") `
+            -RedirectStandardInput empty_stdin.txt `
+            -RedirectStandardOutput dec_out.txt -RedirectStandardError dec_err.txt `
+            -NoNewWindow -PassThru
+          if (-not $p.WaitForExit(480000)) { $p.Kill(); Write-Host "Decompiler TIMED OUT and was killed" }
+          Write-Host "--- decompiler stdout ---"; Get-Content dec_out.txt
+          Write-Host "--- decompiler stderr ---"; Get-Content dec_err.txt
+          Write-Host "Exit code: $($p.ExitCode)"
+          Get-ChildItem lua_out -Recurse -File | ForEach-Object { Write-Host "OUT: $($_.FullName)" }
         continue-on-error: true
         timeout-minutes: 10
 
