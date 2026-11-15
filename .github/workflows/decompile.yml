@@ -12,6 +12,7 @@ permissions:
 jobs:
   decompile:
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -28,18 +29,22 @@ jobs:
         shell: pwsh
         run: |
           $exe = (Get-ChildItem tool -Filter *.exe | Select-Object -First 1).FullName
-          & $exe -? 2>&1 | Out-String | Write-Host
+          # < NUL = no keyboard input, so a "press any key" prompt can't hang the job
+          cmd /c "`"$exe`" -? < NUL" 2>&1 | Out-String | Write-Host
         continue-on-error: true
+        timeout-minutes: 2
 
       - name: Decompile
         shell: pwsh
         run: |
           $exe = (Get-ChildItem tool -Filter *.exe | Select-Object -First 1)
-          & $exe.FullName "$env:GITHUB_WORKSPACE\luac"
+          # < NUL = no keyboard input, so a "press any key" prompt can't hang the job
+          cmd /c "`"$($exe.FullName)`" `"$env:GITHUB_WORKSPACE\luac`" < NUL" 2>&1 | Out-String | Write-Host
           # default output folder is next to the exe
           New-Item -ItemType Directory -Force -Path lua_out | Out-Null
           Copy-Item "$($exe.DirectoryName)\output\*" lua_out -Recurse -Force
         continue-on-error: true
+        timeout-minutes: 10
 
       - name: Upload decompiled Lua
         uses: actions/upload-artifact@v4
