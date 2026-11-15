@@ -1,75 +1,31 @@
-name: Decompile luac to Lua
+name: Decompile LuaJIT
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "luac/**"
-
-permissions:
-  contents: write
 
 jobs:
   decompile:
-    runs-on: windows-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download decompiler (latest release)
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir tool
-          gh release download --repo marsinator358/luajit-decompiler-v2 --pattern "*.exe" --dir tool
-          ls tool
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-      - name: Show decompiler options
-        shell: pwsh
-        run: |
-          $exe = (Get-ChildItem tool -Filter *.exe | Select-Object -First 1).FullName
-          # < NUL = no keyboard input, so a "press any key" prompt can't hang the job
-          cmd /c "`"$exe`" -? < NUL" 2>&1 | Out-String | Write-Host
-        continue-on-error: true
-        timeout-minutes: 2
+      - name: Get decompiler
+        run: git clone https://github.com/Dr-MTN/luajit-decompiler.git ljd-tool
 
       - name: Decompile
-        shell: pwsh
         run: |
-          $exe = Get-ChildItem tool -Filter *.exe | Select-Object -First 1
-          Write-Host "Input files (LuaJIT bytecode starts with 1B 4C 4A):"
-          Get-ChildItem luac -Recurse -File | Where-Object { $_.Name -ne '.gitkeep' } | ForEach-Object {
-            $b = [System.IO.File]::ReadAllBytes($_.FullName) | Select-Object -First 4
-            Write-Host ("{0} | {1} bytes | header: {2}" -f $_.Name, $_.Length, (($b | ForEach-Object { '{0:X2}' -f $_ }) -join ' '))
-          }
-          New-Item -ItemType Directory -Force -Path lua_out | Out-Null
-          # -s = silent (no error prompts), -f = force overwrite (no overwrite prompt), -o = output dir
-          New-Item -ItemType File -Force -Path empty_stdin.txt | Out-Null
-          $p = Start-Process -FilePath $exe.FullName `
-            -ArgumentList @("$env:GITHUB_WORKSPACE\luac", "-s", "-f", "-o", "$env:GITHUB_WORKSPACE\lua_out") `
-            -RedirectStandardInput empty_stdin.txt `
-            -RedirectStandardOutput dec_out.txt -RedirectStandardError dec_err.txt `
-            -NoNewWindow -PassThru
-          if (-not $p.WaitForExit(480000)) { $p.Kill(); Write-Host "Decompiler TIMED OUT and was killed" }
-          Write-Host "--- decompiler stdout ---"; Get-Content dec_out.txt
-          Write-Host "--- decompiler stderr ---"; Get-Content dec_err.txt
-          Write-Host "Exit code: $($p.ExitCode)"
-          Get-ChildItem lua_out -Recurse -File | ForEach-Object { Write-Host "OUT: $($_.FullName)" }
-        continue-on-error: true
-        timeout-minutes: 10
+          mkdir -p output
+          python3 ljd-tool/main.py --recursive ./input --dir_out ./output --catch_asserts --file-extension .luac --enable_logging || true
+          python3 ljd-tool/main.py --recursive ./input --dir_out ./output --catch_asserts --file-extension .lua || true
 
-      - name: Upload decompiled Lua
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: decompiled-lua
-          path: lua_out/
-          if-no-files-found: warn
-
-      - name: Commit decompiled files back to repo
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add lua_out
-          git diff --cached --quiet || (git commit -m "Decompiled Lua [skip ci]" && git push)
+          name: decompiled
+          path: |
+            output
+            logs
